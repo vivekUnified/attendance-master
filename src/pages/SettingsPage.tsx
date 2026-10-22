@@ -52,10 +52,10 @@ export function SettingsPage() {
       <section className="flex flex-col gap-3 rounded-2xl bg-slate-900 p-5">
         <h2 className="text-lg font-medium text-white">Recognition</h2>
         <label className="flex flex-col gap-1 text-sm text-slate-200">
-          Recognition threshold: {Math.round(settings.recognitionThreshold * 100)}%
+          Minimum descriptor match score: {Math.round(settings.recognitionThreshold * 100)}%
           <input
             type="range"
-            min={0.5}
+            min={0.75}
             max={0.99}
             step={0.01}
             value={settings.recognitionThreshold}
@@ -65,6 +65,7 @@ export function SettingsPage() {
           />
           <span className="text-xs text-slate-500">
             Higher values require a closer match, reducing false accepts but increasing false rejects.
+            This score is not a probability. The default 75% allows a descriptor distance of at most 0.5.
           </span>
         </label>
       </section>

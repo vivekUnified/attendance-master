@@ -1,8 +1,9 @@
 /**
- * Live camera preview with an optional face-detection bounding box overlay
+ * Live camera preview with a full-face landmark mesh overlay
  * and a camera-switch control.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { FaceLandmarker } from '@mediapipe/tasks-vision';
 import type { FaceDetectionResult } from '../types';
 import type { UseCameraResult } from '../hooks/useCamera';
 
@@ -25,6 +26,40 @@ export function CameraView({ camera, detection, overlayColor = '#22d3ee', childr
   // Tracked via onLoadedMetadata/onResize instead of reading videoRef.current
   // during render, which would not be reactive.
   const [videoSize, setVideoSize] = useState({ width: 1, height: 1 });
+  const meshRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = meshRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    const points = detection?.landmarks;
+    if (!ready || error || !points || detection?.faceCount !== 1) return;
+
+    context.strokeStyle = overlayColor;
+    context.fillStyle = overlayColor;
+    context.lineWidth = Math.max(0.5, videoSize.width / 1000);
+    context.globalAlpha = 0.35;
+    context.beginPath();
+    for (const { start, end } of FaceLandmarker.FACE_LANDMARKS_TESSELATION) {
+      const a = points[start];
+      const b = points[end];
+      if (!a || !b) continue;
+      context.moveTo(a.x * videoSize.width, a.y * videoSize.height);
+      context.lineTo(b.x * videoSize.width, b.y * videoSize.height);
+    }
+    context.stroke();
+    context.globalAlpha = 0.9;
+    context.beginPath();
+    for (const point of points) {
+      const x = point.x * videoSize.width;
+      const y = point.y * videoSize.height;
+      const radius = Math.max(1, videoSize.width / 600);
+      context.moveTo(x + radius, y);
+      context.arc(x, y, radius, 0, Math.PI * 2);
+    }
+    context.fill();
+  }, [detection, videoSize, overlayColor, ready, error]);
 
   function syncVideoSize() {
     const video = videoRef.current;
@@ -45,18 +80,13 @@ export function CameraView({ camera, detection, overlayColor = '#22d3ee', childr
         className="h-full w-full object-cover"
       />
 
-      {detection?.boundingBox && detection.quality === 'ok' && (
-        <div
-          className="pointer-events-none absolute rounded-lg border-2 transition-all"
-          style={{
-            borderColor: overlayColor,
-            left: `${(detection.boundingBox.x / videoSize.width) * 100}%`,
-            top: `${(detection.boundingBox.y / videoSize.height) * 100}%`,
-            width: `${(detection.boundingBox.width / videoSize.width) * 100}%`,
-            height: `${(detection.boundingBox.height / videoSize.height) * 100}%`,
-          }}
-        />
-      )}
+      <canvas
+        ref={meshRef}
+        width={videoSize.width}
+        height={videoSize.height}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+      />
 
       {!ready && !error && (
         <div className="absolute inset-0 flex items-center justify-center text-slate-300">

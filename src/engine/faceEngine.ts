@@ -1,18 +1,8 @@
 /**
  * Thin wrapper around MediaPipe Tasks Vision `FaceLandmarker`.
  *
- * MediaPipe gives us accurate face detection and 478 3D landmarks per face,
- * but (as noted in the project requirements) it does not provide an
- * out-of-the-box identity embedding. We derive a lightweight, deterministic
- * "embedding" from the landmark geometry: pairwise distances between a
- * stable subset of landmarks, normalized by inter-ocular distance so the
- * vector is robust to the subject's distance from the camera and to
- * translation. This is compared with cosine similarity during matching.
- *
- * This approach is intentionally simple and transparent so it is easy to
- * replace with a dedicated face-recognition embedding model later without
- * changing any downstream code (the rest of the app only depends on
- * `FaceDetectionResult`).
+ * MediaPipe supplies the live mesh; a dedicated recognition network supplies
+ * identity descriptors. Both models see the same captured frame.
  */
 import {
   FaceLandmarker,
@@ -20,21 +10,10 @@ import {
   type FaceLandmarkerResult,
 } from '@mediapipe/tasks-vision';
 import type { FaceDetectionResult } from '../types';
+import { describeFace, getFaceRecognizer } from './faceRecognizer';
 
 const WASM_BASE_URL = `${import.meta.env.BASE_URL}mediapipe-wasm`;
 const MODEL_ASSET_PATH = `${import.meta.env.BASE_URL}models/face_landmarker.task`;
-
-// Landmark indices (MediaPipe FaceMesh topology) used to build the embedding.
-// Chosen to cover eyes, eyebrows, nose, mouth, and jawline contour points
-// that vary meaningfully between individuals while being reasonably stable
-// across expressions.
-const LANDMARK_SUBSET = [
-  33, 133, 160, 159, 158, 157, 173, 263, 362, 387, 386, 385, 384, 398, 1, 2, 98, 327, 61, 291, 0,
-  17, 78, 308, 50, 280, 234, 454, 10, 152, 149, 377, 136, 365,
-];
-
-const LEFT_EYE_OUTER = 33;
-const RIGHT_EYE_OUTER = 263;
 
 let landmarkerPromise: Promise<FaceLandmarker> | null = null;
 
@@ -56,29 +35,6 @@ async function getLandmarker(): Promise<FaceLandmarker> {
     })();
   }
   return landmarkerPromise;
-}
-
-function buildEmbedding(result: FaceLandmarkerResult, faceIndex: number): number[] {
-  const landmarks = result.faceLandmarks[faceIndex];
-  const left = landmarks[LEFT_EYE_OUTER];
-  const right = landmarks[RIGHT_EYE_OUTER];
-  const interOcular = Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z) || 1e-6;
-
-  const points = LANDMARK_SUBSET.map((i) => landmarks[i]);
-  const centroid = points.reduce(
-    (acc, p) => ({ x: acc.x + p.x / points.length, y: acc.y + p.y / points.length, z: acc.z + p.z / points.length }),
-    { x: 0, y: 0, z: 0 },
-  );
-
-  const embedding: number[] = [];
-  for (const p of points) {
-    embedding.push(
-      (p.x - centroid.x) / interOcular,
-      (p.y - centroid.y) / interOcular,
-      (p.z - centroid.z) / interOcular,
-    );
-  }
-  return embedding;
 }
 
 function boundingBoxFromLandmarks(
@@ -109,7 +65,7 @@ function boundingBoxFromLandmarks(
 export const faceEngine = {
   /** Warms up the model so the first real-time frame isn't slow. */
   async preload(): Promise<void> {
-    await getLandmarker();
+    await Promise.all([getLandmarker(), getFaceRecognizer()]);
   },
 
   /**
@@ -120,24 +76,32 @@ export const faceEngine = {
    */
   async detect(video: HTMLVideoElement, timestampMs: number): Promise<FaceDetectionResult> {
     const landmarker = await getLandmarker();
-    const result = landmarker.detectForVideo(video, timestampMs);
+    const frame = document.createElement('canvas');
+    frame.width = video.videoWidth;
+    frame.height = video.videoHeight;
+    const context = frame.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Canvas is unavailable for face recognition.');
+    context.drawImage(video, 0, 0);
+    const result = landmarker.detectForVideo(frame, timestampMs);
 
     const faceCount = result.faceLandmarks.length;
     if (faceCount === 0) {
-      return { faceCount, embedding: null, boundingBox: null, quality: 'no-face' };
+      return { faceCount, embedding: null, landmarks: null, boundingBox: null, quality: 'no-face' };
     }
     if (faceCount > 1) {
-      return { faceCount, embedding: null, boundingBox: null, quality: 'multiple-faces' };
+      return { faceCount, embedding: null, landmarks: null, boundingBox: null, quality: 'multiple-faces' };
     }
 
     const boundingBox = boundingBoxFromLandmarks(result, 0, video.videoWidth, video.videoHeight);
+    const landmarks = result.faceLandmarks[0];
     const minDimension = Math.min(boundingBox?.width ?? 0, boundingBox?.height ?? 0);
-    if (minDimension < video.videoHeight * 0.12) {
+    const clipped = landmarks.some((p) => p.x <= 0.01 || p.x >= 0.99 || p.y <= 0.01 || p.y >= 0.99);
+    if (minDimension < Math.max(80, video.videoHeight * 0.2) || clipped) {
       // Face is too small/far from the camera for a reliable embedding.
-      return { faceCount, embedding: null, boundingBox, quality: 'low-quality' };
+      return { faceCount, embedding: null, landmarks, boundingBox, quality: 'low-quality' };
     }
 
-    const embedding = buildEmbedding(result, 0);
-    return { faceCount, embedding, boundingBox, quality: 'ok' };
+    const embedding = await describeFace(frame);
+    return { faceCount, embedding, landmarks, boundingBox, quality: embedding ? 'ok' : 'low-quality' };
   },
 };

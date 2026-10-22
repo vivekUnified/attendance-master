@@ -35,22 +35,29 @@ export function HomePage() {
   const lastMatchAt = useRef(0);
   const cooldownUntil = useRef(0);
   const matchingRef = useRef(false);
+  const confirmedMatch = useRef({ userId: '', count: 0, at: 0 });
 
   useEffect(() => {
-    if (!result) return;
+    if (!result) {
+      confirmedMatch.current.count = 0;
+      return;
+    }
     const now = performance.now();
 
     if (now < cooldownUntil.current) return;
 
     if (result.quality === 'no-face') {
+      confirmedMatch.current.count = 0;
       setState({ kind: 'no-face' });
       return;
     }
     if (result.quality === 'multiple-faces') {
+      confirmedMatch.current.count = 0;
       setState({ kind: 'multiple-faces' });
       return;
     }
     if (result.quality === 'low-quality') {
+      confirmedMatch.current.count = 0;
       setState({ kind: 'low-quality' });
       return;
     }
@@ -65,9 +72,19 @@ export function HomePage() {
       .identify(result.embedding)
       .then(async (match) => {
         if (!match.user) {
+          confirmedMatch.current.count = 0;
           setState({ kind: 'unknown' });
           return;
         }
+        const previous = confirmedMatch.current;
+        const now = performance.now();
+        confirmedMatch.current = {
+          userId: match.user.id,
+          count: previous.userId === match.user.id && now - previous.at < 2500 ? previous.count + 1 : 1,
+          at: now,
+        };
+        if (confirmedMatch.current.count < 3) return;
+        confirmedMatch.current.count = 0;
         const { record, duplicate } = await attendanceService.markAttendance({
           user: match.user,
           source: 'face-recognition',
@@ -82,6 +99,7 @@ export function HomePage() {
         void record;
       })
       .catch((err) => {
+        confirmedMatch.current.count = 0;
         setState({ kind: 'error', message: err instanceof Error ? err.message : 'Recognition failed' });
       })
       .finally(() => {
@@ -127,13 +145,13 @@ function ScanStatus({ state }: { state: ScanState }) {
     case 'multiple-faces':
       return <StatusBanner kind="warning">Multiple faces detected. Only one person at a time, please.</StatusBanner>;
     case 'low-quality':
-      return <StatusBanner kind="warning">Move a little closer so your face is clearly visible.</StatusBanner>;
+      return <StatusBanner kind="warning">Move closer, face the camera, and keep your whole face visible.</StatusBanner>;
     case 'matching':
-      return <StatusBanner kind="info">Identifying…</StatusBanner>;
+      return <StatusBanner kind="info">Confirming identity across several frames. Hold still…</StatusBanner>;
     case 'unknown':
       return (
         <StatusBanner kind="warning">
-          Face not recognized. If you are not registered yet, please register first.
+          Face not recognized. Register first, or re-enroll an older face sample from Users.
         </StatusBanner>
       );
     case 'marked':

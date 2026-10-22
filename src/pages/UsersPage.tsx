@@ -6,10 +6,51 @@ import { EmptyState, LoadingState } from '../components/EmptyState';
 import { userRepository } from '../services/userRepository';
 import { formatDateTime } from '../utils/date';
 import type { User } from '../types';
+import { isFaceDescriptor } from '../engine/faceDescriptor';
+import { FaceCaptureStep } from './RegisterPage';
+import { StatusBanner } from '../components/StatusBanner';
+import { registrationService } from '../services/registrationService';
 
 export function UsersPage() {
   const [users, setUsers] = useState<User[] | null>(null);
   const [search, setSearch] = useState('');
+  const [reenrolling, setReenrolling] = useState<User | null>(null);
+  const [password, setPassword] = useState('');
+  const [authorized, setAuthorized] = useState(false);
+  const [savingFace, setSavingFace] = useState(false);
+  const [faceError, setFaceError] = useState<string | null>(null);
+  const [faceSaved, setFaceSaved] = useState(false);
+
+  async function authorizeReenrollment(e: React.FormEvent) {
+    e.preventDefault();
+    setFaceError(null);
+    try {
+      if (!await registrationService.verifyPassword(password)) {
+        throw new Error('The registration password is incorrect.');
+      }
+      setAuthorized(true);
+    } catch (err) {
+      setFaceError(err instanceof Error ? err.message : 'Could not verify the registration password.');
+    }
+  }
+
+  async function saveFace(embedding: number[]) {
+    if (!reenrolling || savingFace) return;
+    setSavingFace(true);
+    setFaceError(null);
+    try {
+      await registrationService.reenroll(reenrolling.id, password, embedding);
+      await reload();
+      setReenrolling(null);
+      setPassword('');
+      setAuthorized(false);
+      setFaceSaved(true);
+    } catch (err) {
+      setFaceError(err instanceof Error ? err.message : 'Face re-enrollment failed.');
+    } finally {
+      setSavingFace(false);
+    }
+  }
 
   async function reload() {
     const all = await userRepository.listAll();
@@ -37,6 +78,38 @@ export function UsersPage() {
         <h1 className="text-2xl font-semibold text-white">Registered Users</h1>
         <p className="text-sm text-slate-400">Employees and students registered for face recognition.</p>
       </div>
+
+      {faceSaved && <StatusBanner kind="success">Face updated. Profile and attendance history preserved.</StatusBanner>}
+      {reenrolling && (
+        <section className="flex flex-col gap-3 rounded-2xl bg-slate-900 p-4">
+          <h2 className="text-lg text-white">Re-enroll face: {reenrolling.fullName}</h2>
+          {!authorized ? (
+            <form onSubmit={authorizeReenrollment} className="flex flex-col gap-3">
+              <label htmlFor="reenroll-password" className="text-sm text-slate-200">Registration password</label>
+              <input
+                id="reenroll-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="rounded-lg bg-slate-800 p-2 text-white"
+                required
+              />
+              <button type="submit" className="rounded-lg bg-cyan-600 p-2 text-white">Continue to capture</button>
+            </form>
+          ) : (
+            <FaceCaptureStep onCaptured={(embedding) => void saveFace(embedding)} disabled={savingFace} />
+          )}
+          {faceError && <StatusBanner kind="error">{faceError}</StatusBanner>}
+          <button
+            type="button"
+            disabled={savingFace}
+            onClick={() => { setReenrolling(null); setPassword(''); setAuthorized(false); }}
+            className="self-start rounded-lg bg-slate-800 px-3 py-2 text-sm text-white"
+          >
+            Cancel
+          </button>
+        </section>
+      )}
 
       <input
         value={search}
@@ -70,6 +143,9 @@ export function UsersPage() {
                   <td className="px-4 py-2 capitalize">{user.userType}</td>
                   <td className="px-4 py-2">{formatDateTime(user.registeredAt)}</td>
                   <td className="px-4 py-2">
+                    {!isFaceDescriptor(user.faceEmbedding) && (
+                      <span className="block text-amber-400">Face re-enrollment required</span>
+                    )}
                     {user.active ? (
                       <span className="text-emerald-400">Active</span>
                     ) : (
@@ -77,6 +153,20 @@ export function UsersPage() {
                     )}
                   </td>
                   <td className="px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      disabled={!!reenrolling}
+                      onClick={() => {
+                        setReenrolling(user);
+                        setPassword('');
+                        setAuthorized(false);
+                        setFaceError(null);
+                        setFaceSaved(false);
+                      }}
+                      className="mb-1 mr-2 rounded-lg bg-cyan-900 px-3 py-1 text-xs font-medium text-cyan-100"
+                    >
+                      Re-enroll face
+                    </button>
                     <button
                       type="button"
                       onClick={() => void toggleActive(user)}

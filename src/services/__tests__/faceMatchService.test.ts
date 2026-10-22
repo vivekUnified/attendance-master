@@ -5,7 +5,7 @@ import { settingsRepository } from '../settingsRepository';
 import { faceMatchService } from '../faceMatchService';
 
 function embedding(seed: number): number[] {
-  return Array.from({ length: 8 }, (_, i) => Math.sin(seed + i));
+  return Array.from({ length: 128 }, (_, i) => Math.sin(seed + i) / 10);
 }
 
 describe('faceMatchService', () => {
@@ -52,5 +52,37 @@ describe('faceMatchService', () => {
 
     const match = await faceMatchService.identify(embedding(7));
     expect(match.user).toBeNull();
+  });
+
+  it('rejects ambiguous matches even when both users exceed the threshold', async () => {
+    for (const id of ['A', 'B']) {
+      await userRepository.create({
+        idCardNumber: id, fullName: id, userType: 'employee', faceEmbedding: embedding(5),
+      });
+    }
+    expect((await faceMatchService.identify(embedding(5))).user).toBeNull();
+  });
+
+  it('never compares legacy geometry vectors against recognition descriptors', async () => {
+    await userRepository.create({
+      idCardNumber: 'OLD', fullName: 'Old sample', userType: 'employee',
+      faceEmbedding: Array.from({ length: 102 }, () => 0.1),
+    });
+    expect((await faceMatchService.identify(embedding(5))).user).toBeNull();
+  });
+
+  it('rejects malformed descriptors explicitly', async () => {
+    await expect(faceMatchService.identify([1, 2])).rejects.toThrow('Invalid face descriptor');
+    await expect(faceMatchService.identify(Array(128).fill(NaN))).rejects.toThrow('Invalid face descriptor');
+  });
+
+  it('enforces the maximum distance even when a lower threshold was stored', async () => {
+    await userRepository.create({
+      idCardNumber: 'STRICT', fullName: 'Strict', userType: 'employee', faceEmbedding: embedding(5),
+    });
+    await settingsRepository.update({ recognitionThreshold: 0.5 });
+    const far = embedding(5);
+    far[0] += 0.6;
+    expect((await faceMatchService.identify(far)).user).toBeNull();
   });
 });

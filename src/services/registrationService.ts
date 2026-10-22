@@ -11,6 +11,7 @@ import { syncQueueRepository } from './syncQueueRepository';
 import { syncService } from './syncService';
 import type { CreateUserInput } from './userRepository';
 import type { AttendanceRecord, User } from '../types';
+import { isFaceDescriptor } from '../engine/faceDescriptor';
 
 export { DuplicateUserError };
 
@@ -47,6 +48,7 @@ export const registrationService = {
     if (!trimmedId) throw new Error('ID card number is required.');
     if (!trimmedName) throw new Error('Full name is required.');
     if (!input.faceEmbedding?.length) throw new Error('A face sample is required to register.');
+    if (!isFaceDescriptor(input.faceEmbedding)) throw new Error('Capture a new face sample with the recognition model.');
 
     const user = await userRepository.create({
       idCardNumber: trimmedId,
@@ -71,5 +73,17 @@ export const registrationService = {
     }
 
     return { user, attendance: record };
+  },
+
+  async reenroll(userId: string, password: string, faceEmbedding: number[]): Promise<User> {
+    if (!await registrationService.verifyPassword(password)) throw new InvalidPasswordError();
+    if (!isFaceDescriptor(faceEmbedding)) throw new Error('Capture a valid face descriptor before re-enrolling.');
+    const user = await userRepository.updateFace(userId, faceEmbedding);
+    const settings = await settingsRepository.get();
+    if (settings.dataMode === 'api') {
+      await syncQueueRepository.enqueue('create-user', user);
+      void syncService.runSync();
+    }
+    return user;
   },
 };

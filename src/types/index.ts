@@ -34,7 +34,7 @@ export interface AttendanceRecord {
 }
 
 export interface AppSettings {
-  /** Minimum cosine similarity required to accept a face match (0-1). */
+  /** Minimum distance-based descriptor score (0-1), not a probability. */
   recognitionThreshold: number;
   /** Whether a user may be marked present more than once per day. */
   allowMultipleAttendancePerDay: boolean;
@@ -59,6 +59,8 @@ export interface SyncQueueItem {
 export interface FaceDetectionResult {
   faceCount: number;
   embedding: number[] | null;
+  /** Normalized MediaPipe landmarks, including depth, for the full-face mesh. */
+  landmarks: { x: number; y: number; z: number }[] | null;
   boundingBox: { x: number; y: number; width: number; height: number } | null;
   quality: 'ok' | 'no-face' | 'multiple-faces' | 'low-quality';
 }

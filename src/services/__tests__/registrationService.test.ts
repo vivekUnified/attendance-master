@@ -6,9 +6,12 @@ import {
   InvalidPasswordError,
 } from '../registrationService';
 import { attendanceRepository } from '../attendanceRepository';
+import { userRepository } from '../userRepository';
+import { settingsRepository } from '../settingsRepository';
+import { syncQueueRepository } from '../syncQueueRepository';
 
 function embedding(seed: number): number[] {
-  return Array.from({ length: 8 }, (_, i) => Math.sin(seed + i));
+  return Array.from({ length: 128 }, (_, i) => Math.sin(seed + i) / 10);
 }
 
 describe('registrationService', () => {
@@ -76,5 +79,37 @@ describe('registrationService', () => {
         faceEmbedding: [],
       }),
     ).rejects.toThrow('A face sample is required');
+  });
+
+  it('re-enrolls a legacy face without changing its profile or attendance history', async () => {
+    const { user, attendance } = await registrationService.register({
+      password: '123456', idCardNumber: 'KEEP', fullName: 'Keep History',
+      userType: 'employee', faceEmbedding: embedding(1),
+    });
+    await userRepository.updateFace(user.id, Array(102).fill(0.1));
+    const updated = await registrationService.reenroll(user.id, '123456', embedding(2));
+    expect(updated).toEqual({ ...user, faceEmbedding: embedding(2) });
+    expect((await userRepository.getById(user.id))?.faceEmbedding).toEqual(embedding(2));
+    expect(await attendanceRepository.listAll()).toEqual([attendance]);
+  });
+
+  it('requires the password and a valid descriptor for re-enrollment', async () => {
+    await expect(registrationService.reenroll('missing', 'wrong', embedding(1)))
+      .rejects.toBeInstanceOf(InvalidPasswordError);
+    await expect(registrationService.reenroll('missing', '123456', [1]))
+      .rejects.toThrow('valid face descriptor');
+    await expect(registrationService.reenroll('missing', '123456', embedding(1)))
+      .rejects.toThrow('no longer exists');
+  });
+
+  it('queues an updated face for API synchronization', async () => {
+    const user = await userRepository.create({
+      idCardNumber: 'SYNC', fullName: 'Sync', userType: 'student', faceEmbedding: embedding(1),
+    });
+    await settingsRepository.update({ dataMode: 'api', apiBaseUrl: null });
+    await registrationService.reenroll(user.id, '123456', embedding(2));
+    const pending = await syncQueueRepository.listPending();
+    expect(pending).toHaveLength(1);
+    expect(JSON.parse(pending[0].payload)).toMatchObject({ id: user.id, faceEmbedding: embedding(2) });
   });
 });

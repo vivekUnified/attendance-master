@@ -216,9 +216,12 @@ export function RegisterPage() {
   );
 }
 
-function FaceCaptureStep({ onCaptured }: { onCaptured: (embedding: number[]) => void }) {
+export function FaceCaptureStep({ onCaptured, disabled = false }: {
+  onCaptured: (embedding: number[]) => void;
+  disabled?: boolean;
+}) {
   const camera = useCamera();
-  const { result, modelReady, modelError } = useFaceDetection(camera.videoRef, camera.ready);
+  const { result, samples, modelReady, modelError } = useFaceDetection(camera.videoRef, camera.ready);
   const [captureError, setCaptureError] = useState<string | null>(null);
 
   function handleCapture() {
@@ -243,7 +246,14 @@ function FaceCaptureStep({ onCaptured }: { onCaptured: (embedding: number[]) => 
       setCaptureError('Could not capture a usable face sample. Please try again.');
       return;
     }
-    onCaptured(result.embedding);
+    if (samples.length < 5) {
+      setCaptureError('Hold still until five clear, consistent face samples are ready.');
+      return;
+    }
+    const average = result.embedding.map((_, index) =>
+      samples.reduce((sum, sample) => sum + sample[index], 0) / samples.length,
+    );
+    onCaptured(average);
   }
 
   return (
@@ -251,11 +261,14 @@ function FaceCaptureStep({ onCaptured }: { onCaptured: (embedding: number[]) => 
       <CameraView camera={camera} detection={result} />
       {modelError && <StatusBanner kind="error">Face model failed to load: {modelError}</StatusBanner>}
       {!modelReady && !modelError && <StatusBanner kind="info">Loading face recognition model…</StatusBanner>}
+      <p className="text-sm text-slate-300">
+        Keep your whole face visible and look straight at the camera. Stable samples: {samples.length}/5.
+      </p>
       {captureError && <StatusBanner kind="error">{captureError}</StatusBanner>}
       <button
         type="button"
         onClick={handleCapture}
-        disabled={!modelReady || !camera.ready}
+        disabled={disabled || !modelReady || !camera.ready || !!modelError || samples.length < 5}
         className="rounded-lg bg-cyan-600 px-4 py-2 font-medium text-white hover:bg-cyan-500 disabled:opacity-60"
       >
         Capture face

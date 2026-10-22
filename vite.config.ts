@@ -26,7 +26,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,json,task}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,json,task,bin}', 'models/recognition/LICENSE'],
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
         runtimeCaching: [
           {
@@ -42,7 +42,8 @@ export default defineConfig({
     }),
   ],
   optimizeDeps: {
-    exclude: ['sql.js'],
+    // Convert SQL.js's CommonJS browser entry to ESM for the dev server.
+    include: ['sql.js'],
   },
   test: {
     environment: 'jsdom',

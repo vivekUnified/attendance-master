@@ -21,3 +21,15 @@ for (const file of files) {
 }
 
 console.log(`Copied ${files.length} MediaPipe WASM runtime files to public/mediapipe-wasm`);
+
+const recognitionSource = join(root, 'node_modules/@vladmandic/face-api');
+const recognitionDest = join(root, 'public/models/recognition');
+mkdirSync(recognitionDest, { recursive: true });
+for (const model of ['tiny_face_detector', 'face_landmark_68', 'face_recognition']) {
+  for (const suffix of ['.bin', '-weights_manifest.json']) {
+    const file = `${model}_model${suffix}`;
+    cpSync(join(recognitionSource, 'model', file), join(recognitionDest, file));
+  }
+}
+cpSync(join(recognitionSource, 'LICENSE'), join(recognitionDest, 'LICENSE'));
+console.log('Copied face recognition models and license to public/models/recognition');

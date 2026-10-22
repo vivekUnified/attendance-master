@@ -25,6 +25,7 @@ dist-ssr
 
 # Generated at build/dev time by scripts/copy-mediapipe-assets.mjs
 public/mediapipe-wasm/
+public/models/recognition/
 
 # Local environment overrides
 .env

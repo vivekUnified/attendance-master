@@ -5,8 +5,10 @@
  * (not derived from a real photo) and are only useful for exercising the
  * matching UI, not for demonstrating recognition accuracy.
  */
-import { registrationService } from '../services/registrationService';
+import { attendanceService } from '../services/attendanceService';
 import { userRepository } from '../services/userRepository';
+import { settingsRepository } from '../services/settingsRepository';
+import { syncQueueRepository } from '../services/syncQueueRepository';
 
 function syntheticEmbedding(seed: number): number[] {
   return Array.from({ length: 102 }, (_, i) => Math.sin(seed * 12.9898 + i * 0.37));
@@ -22,13 +24,16 @@ export async function seedDemoData(): Promise<void> {
   for (const sample of SAMPLE_USERS) {
     const existing = await userRepository.findByIdCardNumber(sample.idCardNumber);
     if (existing) continue;
-    await registrationService.register({
-      password: '123456',
+    const user = await userRepository.create({
       idCardNumber: sample.idCardNumber,
       fullName: sample.fullName,
       userType: sample.userType,
       faceEmbedding: syntheticEmbedding(sample.seed),
     });
+    if ((await settingsRepository.get()).dataMode === 'api') {
+      await syncQueueRepository.enqueue('create-user', user);
+    }
+    await attendanceService.markAttendance({ user, source: 'manual', confidence: null });
   }
   // eslint-disable-next-line no-console
   console.info('Seeded demo users: EMP-1001, EMP-1002, STU-2001 (password: 123456)');

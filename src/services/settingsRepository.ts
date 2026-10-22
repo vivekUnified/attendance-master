@@ -5,9 +5,10 @@
 import { getDb, schedulePersist } from '../db/sqlite';
 import type { AppSettings } from '../types';
 import type { Database } from 'sql.js';
+import { RECOGNITION_MODEL } from '../engine/faceDescriptor';
 
 const DEFAULTS: AppSettings = {
-  recognitionThreshold: 0.82,
+  recognitionThreshold: 0.75,
   allowMultipleAttendancePerDay: false,
   registrationPassword: '123456',
   dataMode: (import.meta.env.VITE_DATA_MODE as 'sqlite' | 'api') || 'sqlite',
@@ -40,7 +41,7 @@ export const settingsRepository = {
     return {
       recognitionThreshold: coerce(
         'recognitionThreshold',
-        stored.recognitionThreshold,
+        stored.recognitionModel === RECOGNITION_MODEL ? stored.recognitionThreshold : undefined,
         DEFAULTS.recognitionThreshold,
       ) as number,
       allowMultipleAttendancePerDay: coerce(
@@ -64,6 +65,7 @@ export const settingsRepository = {
     const next = { ...current, ...partial };
 
     const entries: [string, string][] = [
+      ['recognitionModel', RECOGNITION_MODEL],
       ['recognitionThreshold', String(next.recognitionThreshold)],
       ['allowMultipleAttendancePerDay', String(next.allowMultipleAttendancePerDay)],
       ['registrationPassword', next.registrationPassword],

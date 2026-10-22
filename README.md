@@ -12,6 +12,7 @@ enabled and the device is online.
 - React 19 + TypeScript + Vite
 - Tailwind CSS 4
 - `@mediapipe/tasks-vision` (`FaceLandmarker`) for real-time face detection
+- `@vladmandic/face-api` for aligned 128-dimensional identity descriptors
 - `sql.js` (SQLite/WASM) + IndexedDB for offline-first local persistence
 - `vite-plugin-pwa` for the service worker, manifest, and offline asset caching
 - Vitest + Testing Library for unit tests
@@ -30,10 +31,17 @@ access). On first run the app downloads and caches the face-detection model
 and SQLite WASM runtime; after that it keeps working offline, including after
 a full page reload.
 
+SQL.js must remain in `optimizeDeps.include` in `vite.config.ts` so Vite
+converts its CommonJS browser entry to ESM during development. If you see a
+SQL.js "does not provide an export named 'default'" error, restart the dev
+server with `npm run dev -- --force` to rebuild the dependency cache.
+
 > `npm run dev` / `npm run build` automatically copy the MediaPipe WASM
-> runtime from `node_modules` into `public/mediapipe-wasm` (see
-> `scripts/copy-mediapipe-assets.mjs`) so it is served statically and cached
-> by the service worker for offline use.
+> runtime into `public/mediapipe-wasm` and the pinned face-api package's
+> recognition weights, manifests, and MIT license into `public/models/recognition`
+> (see `scripts/copy-mediapipe-assets.mjs`). These generated assets are
+> served locally and precached for offline use. The recognition weights add
+> approximately 7 MB; no face images are sent to an external inference service.
 
 ### Available scripts
 
@@ -124,40 +132,54 @@ await window.seedDemoData();
 // Seeds EMP-1001 (Asha Rao), EMP-1002 (Rahul Mehta), STU-2001 (Priya Nair)
 ```
 
-These use synthetic face embeddings (not derived from real photos), so they
-are only useful for exercising the UI/history screens — they will not match
-against a live camera feed. To test live recognition, register yourself
+These use legacy-format synthetic face embeddings (not derived from real photos),
+so they are only useful for exercising the UI/history screens and are excluded
+from identity matching. Their sample attendance is marked as manual. To test live recognition, register yourself
 through the normal **Register** flow using your camera.
 
 ## Face detection & recognition approach
 
-MediaPipe's `FaceLandmarker` provides accurate face detection and 478 3D
-landmarks per face, but — as called out in the project requirements — it does
-not ship an identity-recognition embedding model. This project derives a
-lightweight, transparent embedding (`src/engine/faceEngine.ts`) from a stable
-subset of landmark geometry (eyes, eyebrows, nose, mouth, jawline), normalized
-by inter-ocular distance so it's robust to the subject's distance from the
-camera. Matching uses cosine similarity (`src/utils/similarity.ts`) against
-all registered, active users, gated by a configurable
-`recognitionThreshold` (Settings screen, default 0.82).
+MediaPipe's `FaceLandmarker` provides 478 normalized 3D landmarks. Attendance
+and registration draw the full tessellated face mesh and landmark dots instead
+of a box. The canvas uses the same source dimensions and centered cover-cropping
+as the video, including portrait cameras in the landscape preview.
 
-This is intentionally simple and swappable: everything downstream only
-depends on the `FaceDetectionResult`/`MatchResult` types, so a dedicated
-face-recognition model (e.g. a FaceNet-style embedding network) can be
-dropped in later without touching the UI or data layer.
+Identity matching uses face-api's Tiny Face Detector, 68-point alignment, and
+ResNet recognition network on the same captured frame as MediaPipe. The engine
+rejects multiple, clipped, or small faces. Registration averages five consecutive,
+consistent 128-dimensional descriptors; it does not use mesh geometry as identity.
 
-**Known limitation:** geometry-based matching is more sensitive to lighting,
-pose, and expression than a learned embedding, and does not defend against
-presentation attacks (e.g. a photo held up to the camera). Treat recognition
-as an identification aid, not proof of identity — see "Security & privacy"
-below.
+Matching uses Euclidean descriptor distance with score `max(0, 1 - distance / 2)`.
+The default minimum score is 0.75 (distance at most 0.5); higher settings are
+stricter. A runner-up must trail by at least 0.025 score (0.05 distance).
+Attendance requires three consecutive identity confirmations, separated by
+at least 650 ms, with no gap over 2.5 seconds. Scores are not probabilities.
+
+### Upgrading existing face enrollments
+
+Old 102-dimensional geometry vectors and synthetic demo vectors are never
+compared with the new descriptors. Open **Users > Re-enroll face**, verify the
+registration password, and capture five stable samples. This replaces only
+the face vector: user IDs, profile details, active status, and attendance history
+are preserved. In API mode the updated user is queued through the existing
+idempotent `PUT /users` endpoint. Backends must preserve all 128 vector values.
+The old cosine threshold is not reused; the descriptor threshold starts at 0.75,
+and new threshold settings are saved with a recognition-model marker.
+
+**Validation limitation:** a dedicated identity model is more appropriate than
+mesh geometry, but no measured accuracy gain is claimed without representative,
+consented validation data. Before deployment, evaluate false accepts/rejects for
+same-person and different-person pairs across lighting, pose, devices, and user
+groups, calibrate the threshold on a separate validation set, then evaluate on a
+held-out set. This model does not implement liveness or presentation-attack
+defenses. Treat it as an identification aid, not proof of identity.
 
 ## Attendance & duplicate validation
 
 - A face is only matched when exactly one face is in frame and it's large
   enough in the frame (reduces false low-confidence matches).
 - `faceMatchService.identify` returns the best match only if its similarity
-  meets the configured threshold; otherwise the face is treated as unknown.
+  meets the configured threshold and ambiguity margin; otherwise the face is unknown.
 - `attendanceRepository.markAttendance` checks whether the user already has a
   `present` record for the current local date. If one exists and
   `allowMultipleAttendancePerDay` is `false` (default), the attempt is
@@ -177,7 +199,8 @@ below.
   LAN address is not sufficient (localhost is allowed for desktop testing).
 - `vite-plugin-pwa` generates a manifest (`icons/`, theme colors, standalone
   display) and a service worker that precaches the app shell, the MediaPipe
-  WASM runtime, and the face-landmarker model (`public/models/face_landmarker.task`).
+  WASM runtime, face-landmarker model (`public/models/face_landmarker.task`),
+  and recognition model weights/manifests/license (`public/models/recognition`).
 - All reads/writes always go through the local SQLite database first, so
   registration, recognition, and attendance marking work with no network
   connection once the app has been loaded/installed once.

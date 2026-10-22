@@ -115,6 +115,15 @@ export const userRepository = {
     return user;
   },
 
+  async updateFace(id: string, faceEmbedding: number[]): Promise<User> {
+    const user = await userRepository.getById(id);
+    if (!user) throw new Error('The user no longer exists.');
+    const db = await getDb();
+    db.run('UPDATE users SET face_embedding = ? WHERE id = ?', [JSON.stringify(faceEmbedding), id]);
+    schedulePersist(db);
+    return { ...user, faceEmbedding };
+  },
+
   async setActive(id: string, active: boolean): Promise<void> {
     const db = await getDb();
     db.run('UPDATE users SET active = ? WHERE id = ?', [active ? 1 : 0, id]);
